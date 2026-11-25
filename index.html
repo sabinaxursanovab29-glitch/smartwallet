@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Smart Wallet</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f1115; color: #f2f2f2;
+    min-height: 100vh; display: flex; justify-content: center;
+    padding: 24px 18px 40px;
+  }
+  .app { width: 100%; max-width: 420px; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+  h1 { font-size: 22px; font-weight: 600; }
+  .sub { font-size: 13px; color: #8a8f98; margin-top: 2px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: #e5484d; box-shadow: 0 0 0 4px rgba(229,72,77,.18); }
+  .dot.on { background: #30a46c; box-shadow: 0 0 0 4px rgba(48,164,108,.18); }
+  .card { background: #181b21; border: 1px solid #262a33; border-radius: 20px; padding: 22px; margin-bottom: 16px; }
+  .lock { text-align: center; padding: 30px 20px; }
+  .lock-icon { font-size: 64px; line-height: 1; margin-bottom: 12px; }
+  .lock-text { font-size: 24px; font-weight: 600; }
+  .lock-text.open { color: #f5a524; }
+  .lock-text.closed { color: #30a46c; }
+  .conn { font-size: 14px; color: #8a8f98; margin-top: 8px; }
+  button {
+    width: 100%; border: none; border-radius: 16px; padding: 17px;
+    font-size: 17px; font-weight: 600; cursor: pointer; margin-bottom: 12px;
+    transition: transform .08s, opacity .2s;
+  }
+  button:active { transform: scale(.98); }
+  button:disabled { opacity: .35; }
+  .primary { background: #3b82f6; color: #fff; }
+  .open-btn { background: #f5a524; color: #1a1300; }
+  .close-btn { background: #30a46c; color: #04140b; }
+  .find-btn { background: #262a33; color: #f2f2f2; }
+  .row { display: flex; gap: 12px; }
+  .row button { flex: 1; }
+  .alert {
+    display: none; background: #3b1214; border: 1px solid #e5484d; color: #ffb4b6;
+    border-radius: 16px; padding: 16px; margin-bottom: 16px; text-align: center; font-weight: 600;
+  }
+  .alert.show { display: block; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .55; } }
+  .log { font-size: 12px; color: #8a8f98; max-height: 120px; overflow-y: auto; line-height: 1.6; }
+  .hint { font-size: 12px; color: #6b7280; text-align: center; margin-top: 18px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div>
+      <h1>Smart Wallet</h1>
+      <div class="sub">Aqlli hamyon boshqaruvi</div>
+    </div>
+    <div class="dot" id="dot"></div>
+  </header>
+
+  <div class="alert" id="alert">⚠️ Hamyon uzoqlashdi! Hamyonni unutmang!</div>
+
+  <div class="card lock">
+    <div class="lock-icon" id="lockIcon">🔒</div>
+    <div class="lock-text closed" id="lockText">Qulf YOPIQ</div>
+    <div class="conn" id="connText">Ulanmagan</div>
+  </div>
+
+  <button class="primary" id="connectBtn">📶 Hamyonga ulanish</button>
+
+  <div class="row">
+    <button class="open-btn" id="openBtn" disabled>🔓 Ochish</button>
+    <button class="close-btn" id="closeBtn" disabled>🔒 Yopish</button>
+  </div>
+  <button class="find-btn" id="findBtn" disabled>🔊 Hamyonni topish</button>
+
+  <div class="card">
+    <div class="log" id="log">Tayyor. "Hamyonga ulanish" tugmasini bosing.</div>
+  </div>
+
+  <div class="hint">iPhone'da bu sahifani <b>Bluefy</b> brauzerida oching.<br>Bluetooth yoqilgan bo'lsin.</div>
+</div>
+
+<script>
+const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+const CHAR_UUID    = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+let device = null;
+let holat = null;
+let qolbdaUzildi = false;
+let audioCtx = null;
+let alarmTimer = null;
+
+const $ = id => document.getElementById(id);
+
+function log(text) {
+  const t = new Date().toLocaleTimeString("uz-UZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  $("log").innerHTML = `${t} — ${text}<br>` + $("log").innerHTML;
+}
+
+function setConnected(on) {
+  $("dot").classList.toggle("on", on);
+  $("connText").textContent = on ? "Hamyon ulangan ✅" : "Ulanmagan";
+  $("openBtn").disabled = !on;
+  $("closeBtn").disabled = !on;
+  $("findBtn").disabled = !on;
+  $("connectBtn").textContent = on ? "❌ Uzish" : "📶 Hamyonga ulanish";
+}
+
+function setLock(value) {
+  const ochiq = value.toUpperCase().includes("OCHIQ");
+  $("lockIcon").textContent = ochiq ? "🔓" : "🔒";
+  $("lockText").textContent = ochiq ? "Qulf OCHIQ" : "Qulf YOPIQ";
+  $("lockText").className = "lock-text " + (ochiq ? "open" : "closed");
+}
+
+function beep(freq = 880, ms = 300) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.frequency.value = freq;
+  o.connect(g); g.connect(audioCtx.destination);
+  g.gain.value = 0.3;
+  o.start();
+  setTimeout(() => o.stop(), ms);
+}
+function startAlarm() {
+  $("alert").classList.add("show");
+  stopAlarm(false);
+  alarmTimer = setInterval(() => beep(1000, 250), 700);
+}
+function stopAlarm(hide = true) {
+  if (alarmTimer) clearInterval(alarmTimer);
+  alarmTimer = null;
+  if (hide) $("alert").classList.remove("show");
+}
+
+async function readState() {
+  try {
+    const v = await holat.readValue();
+    const text = new TextDecoder().decode(v);
+    setLock(text);
+  } catch (e) { }
+}
+
+async function send(cmd) {
+  if (!holat) return;
+  try {
+    await holat.writeValue(new TextEncoder().encode(cmd));
+    log("Yuborildi: " + cmd);
+    setTimeout(readState, 1200);
+  } catch (e) {
+    log("Xato: " + e.message);
+  }
+}
+
+async function connectGatt() {
+  const server = await device.gatt.connect();
+  const service = await server.getPrimaryService(SERVICE_UUID);
+  holat = await service.getCharacteristic(CHAR_UUID);
+  setConnected(true);
+  stopAlarm();
+  log("Hamyonga ulandi");
+  await readState();
+}
+
+async function onDisconnected() {
+  holat = null;
+  setConnected(false);
+  if (qolbdaUzildi) { qolbdaUzildi = false; log("Uzildi"); return; }
+  log("Aloqa uzildi! Hamyon uzoqda qoldi");
+  startAlarm();
+  for (let i = 0; i < 60 && device && !device.gatt.connected; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    try { await connectGatt(); log("Qayta ulandi"); return; } catch (e) { }
+  }
+}
+
+$("connectBtn").addEventListener("click", async () => {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  }
+  if (device && device.gatt.connected) {
+    qolbdaUzildi = true;
+    device.gatt.disconnect();
+    return;
+  }
+  if (!navigator.bluetooth) {
+    log("Bu brauzer Bluetooth'ni qo'llamaydi. Bluefy brauzerida oching.");
+    return;
+  }
+  try {
+    log("Hamyon qidirilmoqda...");
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: "SmartWallet" }],
+      optionalServices: [SERVICE_UUID]
+    });
+    device.addEventListener("gattserverdisconnected", onDisconnected);
+    await connectGatt();
+  } catch (e) {
+    log("Ulanmadi: " + e.message);
+  }
+});
+
+$("openBtn").addEventListener("click", () => send("OCH"));
+$("closeBtn").addEventListener("click", () => send("YOP"));
+$("findBtn").addEventListener("click", () => send("TOP"));
+
+setInterval(() => { if (holat) readState(); }, 5000);
+</script>
+</body>
+</html>
